@@ -1,3 +1,5 @@
+import json
+import os
 import pathlib
 import sys
 from datetime import timedelta, datetime
@@ -175,8 +177,8 @@ def login(task: db.LoginTask):
 
     # Initialize Playwright
     playwright: Playwright = sync_playwright().start()
-    browser = playwright.chromium.launch(headless=False)
-    context: BrowserContext = browser.new_context(storage_state=None)
+     # SC: Launch Foxhound
+    browser = playwright.firefox.launch(executable_path="foxhound/foxhound", headless=False)
 
     # Get login URLs from database (Ordered by success)
     loginurls = (
@@ -187,25 +189,51 @@ def login(task: db.LoginTask):
 
     success: bool = False
 
+    login_taint_analysis_path: str = f"login_taint_analysis/{session_name}"
+    login_taint_analysis_log_path = login_taint_analysis_path + ".json"
+    login_taint_analysis_har_path = login_taint_analysis_path + ".har.zip"
+
     # Iterate over login URLs until login is successful
     loginurl: aa_LoginForm
     for loginurl in loginurls:
-        # Try to log in
-        success = Login.login(browser, context, landing_page, loginurl.formurl, account)
+        # SC: Create a browser context with HAR recording
+        context: BrowserContext = browser.new_context(storage_state=None, record_har_path=login_taint_analysis_har_path)
+        
+        # SC: Configure the browser context to collect taint reports
+        taint_reports = []
+        context.add_init_script(content="window.addEventListener('__taintreport', (r) => { __playwright_taint_report(r.detail, r.detail.str.taint); });")
+        def handle_taint_report(source, value, taint):
+            taint_reports += [{ **value, 'taint': taint }]
+        context.expose_binding("__playwright_taint_report", handle_taint_report)
+        
+        try:
+            # Try to log in
+            success = Login.login(browser, context, landing_page, loginurl.formurl, account)
 
-        # Update login URL success
-        loginurl.success = success
-        loginurl.save()
+            # Update login URL success
+            loginurl.success = success
+            loginurl.save()
 
-        if not success:
-            continue
+            if not success:
+                continue
 
-        # Store context
-        context.storage_state(path=f"auth/{session_name}.json")
-        break
+            # Store context
+            context.storage_state(path=f"auth/{session_name}.json")
+
+            # SC: Store log for login taint analysis
+            with open(login_taint_analysis_log_path, "w") as f:
+                json.dump({ "taintReports": taint_reports }, f)
+
+            break
+        finally:
+            context.close()
+
+            # SC: Remove HAR file if login is unsuccessful
+            if not success:
+                if os.path.isfile(login_taint_analysis_har_path):
+                    os.remove(login_taint_analysis_har_path)
 
     # Free resources
-    context.close()
     browser.close()
     playwright.stop()
 

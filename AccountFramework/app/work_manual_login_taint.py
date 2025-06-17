@@ -340,6 +340,7 @@ def login(task: db.LoginTask):
     time.sleep(2)
 
     # Open playwright to login
+    # TODO(SC): Use Foxhound
     error: Optional[Exception] = open_browser(
         session, landing_page, "login", task.recording
     )
