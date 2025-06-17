@@ -24,3 +24,5 @@ WORKDIR /app
 
 # Install bitwarden CLI
 RUN npm install -g @bitwarden/cli
+# Temporary fix for https://github.com/bitwarden/clients/issues/14995
+RUN npm install -g semver
